@@ -27,9 +27,7 @@ local COMBO_WINDOW_DURATION = 0.73
 
 local function isStunned(player: Player): boolean
 	local untilTime = GameState.StunnedUntil[player]
-	if not untilTime then
-		return false
-	end
+	if not untilTime then return false end
 	if os.clock() >= untilTime then
 		GameState.StunnedUntil[player] = nil
 		return false
@@ -51,7 +49,14 @@ local function applyKnockback(attackerRoot: BasePart, victimRoot: BasePart, hori
 		direction = direction.Unit
 	end
 
-	local velocityVector = direction * horizontalSpeed + Vector3.new(0, upwardSpeed, 0)
+	-- Смягчённая компенсация массы: тяжёлый аватар не становится неуязвимым,
+	-- а лёгкий не улетает с чрезмерным ускорением. sqrt даёт мягкую кривую.
+	local attackerMass = math.max(attackerRoot.AssemblyMass, 1)
+	local victimMass = math.max(victimRoot.AssemblyMass, 1)
+	local massRatio = math.sqrt(attackerMass / victimMass)
+	local massFactor = math.clamp(massRatio, 0.78, 1.22)
+
+	local velocityVector = direction * (horizontalSpeed * massFactor) + Vector3.new(0, upwardSpeed * massFactor, 0)
 	local attachment = Instance.new("Attachment")
 	attachment.Name = "CombatKnockbackAttachment"
 	attachment.Parent = victimRoot
