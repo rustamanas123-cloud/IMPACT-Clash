@@ -4,17 +4,14 @@
     "$className": "DataModel",
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
-      "Remotes": {
-        "$className": "Folder",
-        "AttackRemote": {
-          "$className": "RemoteEvent"
-        },
-        "ToggleBlock": {
-          "$className": "RemoteEvent"
-        },
-        "HitFX": {
-          "$className": "RemoteEvent"
-        }
+      "AttackRemote": {
+        "$className": "RemoteEvent"
+      },
+      "ToggleBlock": {
+        "$className": "RemoteEvent"
+      },
+      "HitFX": {
+        "$className": "RemoteEvent"
       }
     },
     "ServerScriptService": {
