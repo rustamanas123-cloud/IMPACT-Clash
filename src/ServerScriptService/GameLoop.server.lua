@@ -1,14 +1,31 @@
 local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local GameState = require(ServerScriptService:WaitForChild("GameState"))
+local ArenaController = require(ServerScriptService:WaitForChild("ArenaController"))
+local MatchRemote = ReplicatedStorage:WaitForChild("MatchRemote")
 
 local INTERMISSION_DURATION = 8
-local ROUND_DURATION = 120
-local MIN_PLAYERS = 1
-local POST_ROUND_DELAY = 5
+local ROUND_DURATION = 75
+local POST_ROUND_DELAY = 6
+local NORMAL_MIN_PLAYERS = 2
+local SHRINK_STEPS = {
+	{at = 15, radius = 36},
+	{at = 30, radius = 28},
+	{at = 45, radius = 20},
+	{at = 60, radius = 12},
+}
 
-local function clearPlayerState(player)
+local MIN_PLAYERS = RunService:IsStudio() and 1 or NORMAL_MIN_PLAYERS
+local SOLO_TEST = RunService:IsStudio()
+
+local function fireState(state: string, remaining: number, alive: number, total: number)
+	MatchRemote:FireAllClients("State", state, math.max(0, math.ceil(remaining)), alive, total, GameState.RoundNumber)
+end
+
+local function clearPlayerState(player: Player)
 	GameState.Participants[player] = nil
 	GameState.Alive[player] = nil
 	GameState.ChargeStarted[player] = nil
@@ -17,79 +34,134 @@ local function clearPlayerState(player)
 	GameState.ComboCount[player] = nil
 	GameState.LastAttackTime[player] = nil
 	GameState.ComboExpiresAt[player] = nil
+	GameState.DashReadyAt[player] = nil
 end
 
 local function clearRoundState()
 	local list = {}
-	for player in pairs(GameState.Participants) do table.insert(list, player) end
-	for _, player in ipairs(list) do clearPlayerState(player) end
+	for player in pairs(GameState.Participants) do
+		table.insert(list, player)
+	end
+	for _, player in ipairs(list) do
+		clearPlayerState(player)
+	end
 end
 
-local function spawnPoints()
-	local result = {}
-	local folder = workspace:FindFirstChild("Spawns")
-	if folder then
-		for _, object in ipairs(folder:GetChildren()) do
-			if object:IsA("BasePart") then table.insert(result, object) end
+local function countAlive(): number
+	local count = 0
+	for player in pairs(GameState.Alive) do
+		if GameState.Participants[player] then
+			count += 1
 		end
 	end
-	return result
+	return count
 end
 
-local function teleportPlayer(player, index, total)
-	local character = player.Character
-	local root = character and character:FindFirstChild("HumanoidRootPart")
-	if not root then return end
-	local points = spawnPoints()
-	if #points > 0 then
-		root.CFrame = points[((index - 1) % #points) + 1].CFrame + Vector3.new(0, 3, 0)
-	else
-		local angle = ((index - 1) / math.max(total, 1)) * math.pi * 2
-		root.CFrame = CFrame.new(math.cos(angle) * 12, 4, math.sin(angle) * 12)
+local function eliminate(player: Player, reason: string)
+	if not GameState.Participants[player] or not GameState.Alive[player] then return end
+	GameState.Alive[player] = nil
+	GameState.IsBlocking[player] = false
+	GameState.ChargeStarted[player] = nil
+	GameState.StunnedUntil[player] = nil
+	MatchRemote:FireAllClients("Eliminated", player.UserId, player.DisplayName, reason)
+
+	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+	if humanoid and humanoid.Health > 0 then
+		humanoid.Health = 0
 	end
 end
 
-local function hookDeath(player, character)
+local function hookDeath(player: Player, character: Model)
 	local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 5)
 	if not humanoid then return end
+
 	humanoid.Died:Connect(function()
 		if GameState.Participants[player] then
 			GameState.Alive[player] = nil
 			GameState.IsBlocking[player] = false
 			GameState.ChargeStarted[player] = nil
+			MatchRemote:FireAllClients("Eliminated", player.UserId, player.DisplayName, "KO")
 		end
 	end)
 end
 
-local function countAlive()
-	local count = 0
-	for player in pairs(GameState.Alive) do
-		if GameState.Participants[player] then count += 1 end
+local function teleportToSpawn(player: Player, index: number, total: number)
+	local character = player.Character
+	local root = character and character:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+	local points = ArenaController.GetSpawnPoints()
+	if #points > 0 then
+		local point = points[((index - 1) % #points) + 1]
+		root.CFrame = point.CFrame + Vector3.new(0, 3, 0)
+	else
+		local angle = ((index - 1) / math.max(total, 1)) * math.pi * 2
+		root.CFrame = CFrame.new(math.cos(angle) * 12, 5, math.sin(angle) * 12)
 	end
-	return count
+	root.AssemblyLinearVelocity = Vector3.zero
 end
 
 local function startRound()
 	clearRoundState()
+	ArenaController.ResetRadius()
+	GameState.RoundNumber += 1
+	GameState.Winner = nil
 	GameState.Current = GameState.States.ROUND
-	local players = Players:GetPlayers()
-	for _, player in ipairs(players) do
+
+	local participants = Players:GetPlayers()
+	for _, player in ipairs(participants) do
 		GameState.Participants[player] = true
 		GameState.Alive[player] = true
 		GameState.IsBlocking[player] = false
 		GameState.ComboCount[player] = 0
 		GameState.ComboExpiresAt[player] = 0
 		GameState.LastAttackTime[player] = 0
+		GameState.DashReadyAt[player] = 0
 		player:LoadCharacter()
 	end
 
-	task.wait(0.75)
-	local active = Players:GetPlayers()
+	task.wait(0.85)
+
+	local active = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		if GameState.Participants[player] and player.Character then
+			table.insert(active, player)
+			hookDeath(player, player.Character)
+		end
+	end
+
 	for index, player in ipairs(active) do
-		if GameState.Participants[player] then teleportPlayer(player, index, #active) end
-		if player.Character then hookDeath(player, player.Character) end
+		teleportToSpawn(player, index, #active)
+	end
+
+	MatchRemote:FireAllClients("RoundStart", GameState.RoundNumber, #active)
+end
+
+local function findWinner(): Player?
+	local winner: Player? = nil
+	for player in pairs(GameState.Alive) do
+		if GameState.Participants[player] then
+			if winner then return nil end
+			winner = player
+		end
+	end
+	return winner
+end
+
+local function sendWinner(winner: Player?)
+	GameState.Winner = winner
+	if winner then
+		local stats = winner:FindFirstChild("leaderstats")
+		local wins = stats and stats:FindFirstChild("Wins")
+		if wins and wins:IsA("IntValue") then
+			wins.Value += 1
+		end
+		MatchRemote:FireAllClients("Winner", winner.UserId, winner.DisplayName)
+	else
+		MatchRemote:FireAllClients("Winner", 0, "NO WINNER")
 	end
 end
+
+ArenaController.Build()
 
 Players.PlayerAdded:Connect(function(player)
 	player.CharacterAdded:Connect(function(character)
@@ -104,20 +176,62 @@ Players.PlayerRemoving:Connect(clearPlayerState)
 task.spawn(function()
 	while true do
 		GameState.Current = GameState.States.LOBBY
-		while #Players:GetPlayers() < MIN_PLAYERS do task.wait(1) end
+		GameState.Winner = nil
+		ArenaController.ResetRadius()
 
-		GameState.Current = GameState.States.INTERMISSION
-		for _ = INTERMISSION_DURATION, 1, -1 do
-			if #Players:GetPlayers() < MIN_PLAYERS then break end
+		while #Players:GetPlayers() < MIN_PLAYERS do
+			fireState(GameState.States.LOBBY, 0, countAlive(), 0)
 			task.wait(1)
 		end
-		if #Players:GetPlayers() < MIN_PLAYERS then continue end
+
+		GameState.Current = GameState.States.INTERMISSION
+		local intermissionEnds = os.clock() + INTERMISSION_DURATION
+		while os.clock() < intermissionEnds do
+			if #Players:GetPlayers() < MIN_PLAYERS then break end
+			fireState(GameState.States.INTERMISSION, intermissionEnds - os.clock(), 0, #Players:GetPlayers())
+			task.wait(0.25)
+		end
+
+		if #Players:GetPlayers() < MIN_PLAYERS then
+			continue
+		end
 
 		startRound()
-		local endTime = os.clock() + ROUND_DURATION
-		while GameState.Current == GameState.States.ROUND and os.clock() < endTime do
-			if countAlive() <= 1 then break end
-			task.wait(0.15)
+		local roundStart = os.clock()
+		GameState.RoundEndsAt = roundStart + ROUND_DURATION
+		local nextShrink = 1
+
+		while GameState.Current == GameState.States.ROUND and os.clock() < GameState.RoundEndsAt do
+			local elapsed = os.clock() - roundStart
+			local alive = countAlive()
+			fireState(GameState.States.ROUND, GameState.RoundEndsAt - os.clock(), alive, #Players:GetPlayers())
+
+			local shrinkStep = SHRINK_STEPS[nextShrink]
+			if shrinkStep and elapsed >= shrinkStep.at then
+				ArenaController.SetRadius(shrinkStep.radius)
+			MatchRemote:FireAllClients("Shrink", shrinkStep.radius, shrinkStep.at)
+			nextShrink += 1
+			end
+
+			local center = ArenaController.GetCenter()
+			local radius = ArenaController.GetRadius()
+			for player in pairs(GameState.Alive) do
+				if GameState.Participants[player] then
+					local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+					if root then
+						local flatOffset = Vector3.new(root.Position.X - center.X, 0, root.Position.Z - center.Z)
+						if flatOffset.Magnitude > radius + 0.5 or root.Position.Y < -7 then
+							eliminate(player, "FALL")
+						end
+					end
+				end
+			end
+
+			if (not SOLO_TEST and alive <= 1) or (SOLO_TEST and alive <= 0) then
+				break
+			end
+
+			task.wait(0.12)
 		end
 
 		GameState.Current = GameState.States.ENDED
@@ -125,8 +239,12 @@ task.spawn(function()
 			GameState.ChargeStarted[player] = nil
 			GameState.IsBlocking[player] = false
 		end
+
+		local winner = findWinner()
+		sendWinner(winner)
+		fireState(GameState.States.ENDED, POST_ROUND_DELAY, countAlive(), #Players:GetPlayers())
 		task.wait(POST_ROUND_DELAY)
 	end
 end)
 
-print(">>> IMPACT Clash GameLoop // ROUND SYSTEM READY <<<")
+print(">>> IMPACT Clash GameLoop // CYBER ARENA ONLINE <<<")
