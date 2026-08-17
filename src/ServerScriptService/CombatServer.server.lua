@@ -16,10 +16,11 @@ local OVERCHARGE_LIMIT = 1.02
 local ATTACK_RANGE = 15
 local MIN_DOT = 0.30
 local STUN_DURATION = 0.45
+local BLOCK_STUN_MULTIPLIER = 0.35
 local ATTACK_COOLDOWN = 0.60
 local COMBO_WINDOW_DURATION = 0.73
 local OVERCHARGE_STUN = 0.60
-local KNOCKBACK_DURATION = 0.12
+local KNOCKBACK_DURATION = 0.14
 local MAX_ACTIONS_PER_SECOND = 12
 
 local rateState = {}
@@ -59,6 +60,7 @@ local function clearCombatState(player: Player)
 	GameState.ComboCount[player] = nil
 	GameState.LastAttackTime[player] = nil
 	GameState.ComboExpiresAt[player] = nil
+	GameState.DashReadyAt[player] = nil
 	rateState[player] = nil
 end
 
@@ -79,8 +81,18 @@ local function applyKnockback(attackerRoot: BasePart, victimRoot: BasePart, hori
 
 	local attackerMass = math.max(attackerRoot.AssemblyMass, 1)
 	local victimMass = math.max(victimRoot.AssemblyMass, 1)
-	local massFactor = math.clamp(math.sqrt(attackerMass / victimMass), 0.78, 1.22)
+	local massFactor = math.clamp(math.sqrt(attackerMass / victimMass), 0.80, 1.20)
 	local velocity = direction * (horizontalSpeed * massFactor) + Vector3.new(0, upwardSpeed * massFactor, 0)
+
+	pcall(function()
+		victimRoot:SetNetworkOwner(nil)
+	end)
+
+	victimRoot.AssemblyLinearVelocity = Vector3.new(
+		victimRoot.AssemblyLinearVelocity.X * 0.25,
+		math.max(victimRoot.AssemblyLinearVelocity.Y, -35) * 0.2,
+		victimRoot.AssemblyLinearVelocity.Z * 0.25
+	) + velocity
 
 	local attachment = Instance.new("Attachment")
 	attachment.Name = "ImpactKnockbackAttachment"
@@ -97,13 +109,18 @@ local function applyKnockback(attackerRoot: BasePart, victimRoot: BasePart, hori
 	task.delay(KNOCKBACK_DURATION, function()
 		if linearVelocity.Parent then linearVelocity:Destroy() end
 		if attachment.Parent then attachment:Destroy() end
+		if victimRoot.Parent and victimRoot:IsDescendantOf(workspace) then
+			pcall(function()
+				victimRoot:SetNetworkOwner(nil)
+			end)
+		end
 	end)
 end
 
 local function showDamageIndicator(part: BasePart, damage: number, hitType: string, comboStep: number, isFinisher: boolean)
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = "ImpactDamage"
-	billboard.Size = UDim2.fromOffset(190, 76)
+	billboard.Size = UDim2.fromOffset(isFinisher and 250 or 190, isFinisher and 90 or 76)
 	billboard.StudsOffset = Vector3.new(math.random(-12, 12) / 10, 2.4, 0)
 	billboard.AlwaysOnTop = true
 	billboard.Adornee = part
@@ -115,13 +132,13 @@ local function showDamageIndicator(part: BasePart, damage: number, hitType: stri
 	label.Font = Enum.Font.FredokaOne
 	label.TextScaled = true
 	label.TextStrokeTransparency = 0
-	label.TextStrokeColor3 = Color3.fromRGB(10, 10, 15)
+	label.TextStrokeColor3 = Color3.fromRGB(7, 9, 16)
 	label.Text = isFinisher and ("FINISHER  " .. damage) or (comboStep > 1 and ("x" .. comboStep .. "  " .. damage) or tostring(damage))
-	label.TextColor3 = isFinisher and Color3.fromRGB(255, 45, 45) or hitType == "Perfect" and Color3.fromRGB(255, 195, 55) or hitType == "Blocked" and Color3.fromRGB(100, 190, 255) or Color3.fromRGB(255, 255, 255)
+	label.TextColor3 = isFinisher and Color3.fromRGB(255, 45, 70) or hitType == "Perfect" and Color3.fromRGB(255, 205, 70) or hitType == "Blocked" and Color3.fromRGB(115, 200, 255) or Color3.fromRGB(250, 250, 255)
 	label.Parent = billboard
 
 	local rise = TweenService:Create(billboard, TweenInfo.new(0.65, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-		StudsOffset = billboard.StudsOffset + Vector3.new(0, 3.5, 0),
+		StudsOffset = billboard.StudsOffset + Vector3.new(0, isFinisher and 4.5 or 3.5, 0),
 	})
 	local fade = TweenService:Create(label, TweenInfo.new(0.65, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
 		TextTransparency = 1,
@@ -149,7 +166,7 @@ local function getHitTarget(attacker: Player): Model?
 	local attackerRoot = attackerCharacter and attackerCharacter.PrimaryPart
 	if not attackerRoot then return nil end
 
-	local bestTarget = nil
+	local bestTarget: Model? = nil
 	local closestDistance = ATTACK_RANGE
 	for _, victimPlayer in ipairs(Players:GetPlayers()) do
 		if victimPlayer ~= attacker and GameState.Participants[victimPlayer] and GameState.Alive[victimPlayer] then
@@ -231,8 +248,10 @@ AttackRemote.OnServerEvent:Connect(function(player, action)
 	local isFinisher = combo == 3
 	if combo == 2 then
 		damage = math.floor(damage * 1.25)
+		hSpeed *= 1.10
+		vSpeed *= 1.08
 	elseif isFinisher then
-		damage = math.floor(damage * 1.5)
+		damage = math.floor(damage * 1.50)
 		hSpeed *= 1.35
 		vSpeed *= 1.25
 	end
@@ -253,9 +272,9 @@ AttackRemote.OnServerEvent:Connect(function(player, action)
 
 	local blocked = GameState.IsBlocking[victimPlayer] == true
 	if blocked then
-		damage = math.max(1, math.floor(damage * 0.4))
-		hSpeed *= 0.2
-		vSpeed *= 0.2
+		damage = math.max(1, math.floor(damage * 0.35))
+		hSpeed *= 0.18
+		vSpeed *= 0.20
 		isFinisher = false
 		resetCombo(player)
 		fireFX(player, "Attacker", "Blocked", combo, damage)
@@ -273,16 +292,21 @@ AttackRemote.OnServerEvent:Connect(function(player, action)
 
 	GameState.ChargeStarted[victimPlayer] = nil
 	GameState.IsBlocking[victimPlayer] = false
+	GameState.StunnedUntil[victimPlayer] = now + (blocked and STUN_DURATION * BLOCK_STUN_MULTIPLIER or STUN_DURATION)
+
 	if humanoid.Health <= 0 then
 		GameState.Alive[victimPlayer] = nil
 		GameState.StunnedUntil[victimPlayer] = nil
 		resetCombo(victimPlayer)
+
+		local stats = player:FindFirstChild("leaderstats")
+		local kos = stats and stats:FindFirstChild("KOs")
+		if kos and kos:IsA("IntValue") then kos.Value += 1 end
+
 		fireFX(victimPlayer, "Victim", "KO", combo, damage)
-	else
-		GameState.StunnedUntil[victimPlayer] = now + STUN_DURATION
 	end
 end)
 
 Players.PlayerRemoving:Connect(clearCombatState)
 
-print(">>> IMPACT Clash CombatServer // SERVER AUTHORITY READY <<<")
+print(">>> IMPACT Clash CombatServer // KNOCKBACK + COMBO + ANTI-SPAM READY <<<")
