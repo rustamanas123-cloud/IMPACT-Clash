@@ -5,15 +5,11 @@
 
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
-      "AttackRemote": {
-        "$className": "RemoteEvent"
-      },
-      "ToggleBlock": {
-        "$className": "RemoteEvent"
-      },
-      "HitFX": {
-        "$className": "RemoteEvent"
-      }
+      "AttackRemote": { "$className": "RemoteEvent" },
+      "ToggleBlock": { "$className": "RemoteEvent" },
+      "HitFX": { "$className": "RemoteEvent" },
+      "MatchRemote": { "$className": "RemoteEvent" },
+      "DashRemote": { "$className": "RemoteEvent" }
     },
 
     "ServerScriptService": {
