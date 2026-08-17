@@ -2,6 +2,7 @@
   "name": "IMPACT-Clash",
   "tree": {
     "$className": "DataModel",
+
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
       "AttackRemote": {
@@ -14,10 +15,12 @@
         "$className": "RemoteEvent"
       }
     },
+
     "ServerScriptService": {
       "$className": "ServerScriptService",
       "$path": "src/ServerScriptService"
     },
+
     "StarterPlayer": {
       "$className": "StarterPlayer",
       "StarterPlayerScripts": {
@@ -25,6 +28,7 @@
         "$path": "src/StarterPlayer/StarterPlayerScripts"
       }
     },
+
     "Workspace": {
       "$className": "Workspace",
       "$path": "src/Workspace"
