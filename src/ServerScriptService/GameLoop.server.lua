@@ -39,20 +39,14 @@ end
 
 local function clearRoundState()
 	local list = {}
-	for player in pairs(GameState.Participants) do
-		table.insert(list, player)
-	end
-	for _, player in ipairs(list) do
-		clearPlayerState(player)
-	end
+	for player in pairs(GameState.Participants) do table.insert(list, player) end
+	for _, player in ipairs(list) do clearPlayerState(player) end
 end
 
 local function countAlive(): number
 	local count = 0
 	for player in pairs(GameState.Alive) do
-		if GameState.Participants[player] then
-			count += 1
-		end
+		if GameState.Participants[player] then count += 1 end
 	end
 	return count
 end
@@ -66,15 +60,12 @@ local function eliminate(player: Player, reason: string)
 	MatchRemote:FireAllClients("Eliminated", player.UserId, player.DisplayName, reason)
 
 	local humanoid = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-	if humanoid and humanoid.Health > 0 then
-		humanoid.Health = 0
-	end
+	if humanoid and humanoid.Health > 0 then humanoid.Health = 0 end
 end
 
 local function hookDeath(player: Player, character: Model)
 	local humanoid = character:FindFirstChildOfClass("Humanoid") or character:WaitForChild("Humanoid", 5)
 	if not humanoid then return end
-
 	humanoid.Died:Connect(function()
 		if GameState.Participants[player] then
 			GameState.Alive[player] = nil
@@ -129,10 +120,7 @@ local function startRound()
 		end
 	end
 
-	for index, player in ipairs(active) do
-		teleportToSpawn(player, index, #active)
-	end
-
+	for index, player in ipairs(active) do teleportToSpawn(player, index, #active) end
 	MatchRemote:FireAllClients("RoundStart", GameState.RoundNumber, #active)
 end
 
@@ -147,16 +135,49 @@ local function findWinner(): Player?
 	return winner
 end
 
+local function waitForStats(player: Player)
+	local deadline = os.clock() + 5
+	while player.Parent and player:GetAttribute("StatsLoaded") ~= true and os.clock() < deadline do
+		task.wait(0.1)
+	end
+	return player.Parent ~= nil
+end
+
+local function adjustIntStat(player: Player, statName: string, amount: number)
+	local stats = player:FindFirstChild("leaderstats")
+	local value = stats and stats:FindFirstChild(statName)
+	if value and value:IsA("IntValue") then
+		value.Value = math.max(0, value.Value + amount)
+	end
+end
+
 local function sendWinner(winner: Player?)
 	GameState.Winner = winner
+
+	for player in pairs(GameState.Participants) do
+		if player.Parent then waitForStats(player) end
+	end
+
 	if winner then
-		local stats = winner:FindFirstChild("leaderstats")
-		local wins = stats and stats:FindFirstChild("Wins")
-		if wins and wins:IsA("IntValue") then
-			wins.Value += 1
+		adjustIntStat(winner, "Wins", 1)
+		adjustIntStat(winner, "Coins", 50)
+		adjustIntStat(winner, "Streak", 1)
+
+		for player in pairs(GameState.Participants) do
+			if player ~= winner and player.Parent then
+				adjustIntStat(player, "Coins", 10)
+				adjustIntStat(player, "Streak", -1000000)
+			end
 		end
+
 		MatchRemote:FireAllClients("Winner", winner.UserId, winner.DisplayName)
 	else
+		for player in pairs(GameState.Participants) do
+			if player.Parent then
+				adjustIntStat(player, "Coins", 10)
+				adjustIntStat(player, "Streak", -1000000)
+			end
+		end
 		MatchRemote:FireAllClients("Winner", 0, "NO WINNER")
 	end
 end
@@ -165,9 +186,7 @@ ArenaController.Build()
 
 Players.PlayerAdded:Connect(function(player)
 	player.CharacterAdded:Connect(function(character)
-		if GameState.Current == GameState.States.ROUND and GameState.Participants[player] then
-			hookDeath(player, character)
-		end
+		if GameState.Current == GameState.States.ROUND and GameState.Participants[player] then hookDeath(player, character) end
 	end)
 end)
 
@@ -191,10 +210,7 @@ task.spawn(function()
 			fireState(GameState.States.INTERMISSION, intermissionEnds - os.clock(), 0, #Players:GetPlayers())
 			task.wait(0.25)
 		end
-
-		if #Players:GetPlayers() < MIN_PLAYERS then
-			continue
-		end
+		if #Players:GetPlayers() < MIN_PLAYERS then continue end
 
 		startRound()
 		local roundStart = os.clock()
@@ -209,8 +225,8 @@ task.spawn(function()
 			local shrinkStep = SHRINK_STEPS[nextShrink]
 			if shrinkStep and elapsed >= shrinkStep.at then
 				ArenaController.SetRadius(shrinkStep.radius)
-			MatchRemote:FireAllClients("Shrink", shrinkStep.radius, shrinkStep.at)
-			nextShrink += 1
+				MatchRemote:FireAllClients("Shrink", shrinkStep.radius, shrinkStep.at)
+				nextShrink += 1
 			end
 
 			local center = ArenaController.GetCenter()
@@ -220,17 +236,12 @@ task.spawn(function()
 					local root = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
 					if root then
 						local flatOffset = Vector3.new(root.Position.X - center.X, 0, root.Position.Z - center.Z)
-						if flatOffset.Magnitude > radius + 0.5 or root.Position.Y < -7 then
-							eliminate(player, "FALL")
-						end
+						if flatOffset.Magnitude > radius + 0.5 or root.Position.Y < -7 then eliminate(player, "FALL") end
 					end
 				end
 			end
 
-			if (not SOLO_TEST and alive <= 1) or (SOLO_TEST and alive <= 0) then
-				break
-			end
-
+			if (not SOLO_TEST and alive <= 1) or (SOLO_TEST and alive <= 0) then break end
 			task.wait(0.12)
 		end
 
@@ -247,4 +258,4 @@ task.spawn(function()
 	end
 end)
 
-print(">>> IMPACT Clash GameLoop // CYBER ARENA ONLINE <<<")
+print(">>> IMPACT Clash GameLoop // PERSISTENT REWARDS + CYBER ARENA ONLINE <<<")
